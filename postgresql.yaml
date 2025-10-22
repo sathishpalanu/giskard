@@ -1,0 +1,4 @@
+oc new-app postgresql-persistent \
+  -p POSTGRESQL_USER=giskard \
+  -p POSTGRESQL_PASSWORD=giskardpass \
+  -p POSTGRESQL_DATABASE=giskard

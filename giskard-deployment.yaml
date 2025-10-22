@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: giskard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: giskard
+  template:
+    metadata:
+      labels:
+        app: giskard
+    spec:
+      containers:
+        - name: giskard
+          image: giskardai/giskard:latest
+          ports:
+            - containerPort: 19000
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://postgresql:5432/giskard
+            - name: SPRING_DATASOURCE_USERNAME
+              value: giskard
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: giskardpass
+          resources:
+            limits:
+              memory: "1Gi"
+              cpu: "500m"

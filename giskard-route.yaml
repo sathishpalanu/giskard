@@ -1,0 +1,12 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: giskard
+spec:
+  to:
+    kind: Service
+    name: giskard
+  port:
+    targetPort: 19000
+  tls:
+    termination: edge
