@@ -1,15 +1,16 @@
 """
-raget_local_test_ollama.py
+raget_local_ollama.py
 
-Minimal example to test Giskard RAG Evaluation Toolkit (RAGET)
-with a local Ollama Llama 3 1-8B-Instruct model.
+Pure Ollama-based RAG evaluation with Giskard Python SDK.
 
 Requirements:
-    pip install giskard ollama
+    pip install giskard
+    Ollama must be installed locally and have llama3.1:8b-instruct downloaded
 """
 
 import pandas as pd
 from giskard.rag import KnowledgeBase, AgentAnswer, generate_testset, evaluate
+import subprocess
 
 # --------------------------------------------------------------
 # Step 1: Knowledge Base
@@ -25,29 +26,28 @@ def create_knowledge_base():
     return kb, docs
 
 # --------------------------------------------------------------
-# Step 2: Load Ollama model
+# Step 2: Ollama prediction function
 # --------------------------------------------------------------
-def load_ollama_model(model_name="llama3.1:8b-instruct"):
+def ollama_predict(prompt, model_name="llama3.1:8b-instruct"):
     """
-    Returns a function that calls Ollama CLI to generate text.
+    Call Ollama CLI to generate text locally.
     """
-    import subprocess
-
-    def predict(prompt):
-        # Use Ollama CLI to generate output
+    try:
         result = subprocess.run(
             ["ollama", "generate", model_name, prompt],
             capture_output=True,
-            text=True
+            text=True,
+            check=True
         )
         return result.stdout.strip()
-
-    return predict
+    except subprocess.CalledProcessError as e:
+        print("❌ Ollama generate failed:", e.stderr)
+        return "Error: Could not generate response"
 
 # --------------------------------------------------------------
 # Step 3: RAG prediction function
 # --------------------------------------------------------------
-def build_rag_predict_fn(ollama_predict, docs):
+def build_rag_predict_fn(docs):
     def rag_predict_fn(question: str, history=None):
         context = "\n".join(docs)
         prompt = f"Answer the question using the following context:\n\n{context}\n\nQ: {question}\nA:"
@@ -63,7 +63,7 @@ def generate_rag_testset(kb):
         knowledge_base=kb,
         num_questions=5,
         language="en",
-        agent_description="A local assistant using Llama 3 via Ollama."
+        agent_description="Local assistant using Llama 3 via Ollama"
     )
     testset.save("rag_testset_local.jsonl")
     return testset
@@ -87,10 +87,7 @@ def main():
     kb, docs = create_knowledge_base()
     print("✅ Knowledge base created with", len(docs), "documents.")
 
-    ollama_predict = load_ollama_model()
-    print("✅ Ollama Llama 3 model ready.")
-
-    rag_predict_fn = build_rag_predict_fn(ollama_predict, docs)
+    rag_predict_fn = build_rag_predict_fn(docs)
     print("✅ RAG prediction function ready.")
 
     testset = generate_rag_testset(kb)
