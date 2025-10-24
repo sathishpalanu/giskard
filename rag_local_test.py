@@ -1,8 +1,8 @@
-# rag_local_test_llama_autodiscover.py
+# rag_local_test_llama3_listener.py
 
 """
 Offline RAG Evaluation using Llama3 1-8B-Instruct via locally running Ollama.
-Automatically discovers the local listener to avoid hardcoding the port.
+Automatically discovers the local listener and uses correct Ollama API endpoint.
 """
 
 import requests
@@ -43,6 +43,7 @@ docs = [
     "Giskard is a framework for testing and evaluating AI and RAG systems.",
     "Llama 3 1-8B-Instruct is a large language model by Meta."
 ]
+
 df_kb = pd.DataFrame({"text": docs})
 print(f"✅ Knowledge base created with {len(docs)} documents.")
 
@@ -52,20 +53,26 @@ print(f"✅ Knowledge base created with {len(docs)} documents.")
 def ollama_predict_listener(prompt):
     """
     Sends the prompt to the local Ollama listener and returns the model's response.
+    Uses correct Ollama API endpoint (/v1/completions).
     """
-    payload = {"model": MODEL_NAME, "prompt": prompt, "max_tokens": 512}
+    payload = {
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "max_tokens": 512
+    }
     try:
-        response = requests.post(f"{LOCAL_LISTENER_URL}/generate", json=payload)
+        response = requests.post(f"{LOCAL_LISTENER_URL}/v1/completions", json=payload)
         response.raise_for_status()
         data = response.json()
-        return data.get("completion", data.get("text", "No output from model"))
+        # Ollama returns 'completion' or 'text'
+        return data.get("completion") or data.get("text") or "No output from model"
     except requests.RequestException as e:
         print("❌ Error contacting local listener:", e)
         return "Error: Could not generate response"
 
 def build_rag_predict_fn():
     """
-    Returns a RAG prediction function using local listener.
+    Returns a RAG prediction function using the local listener.
     """
     def rag_predict_fn(question: str):
         context = "\n".join(docs)
