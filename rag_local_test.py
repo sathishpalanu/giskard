@@ -1,8 +1,8 @@
-# rag_local_test_llama3_cli.py
+# rag_local_test_llama3_cli_safe.py
 
 """
-Offline RAG Evaluation using Llama3 1-8B-Instruct via Ollama CLI.
-This avoids REST calls and works fully locally on Mac M1.
+Offline RAG Evaluation using Llama3 1-8B-Instruct via Ollama CLI (safe mode).
+Handles CLI errors gracefully and logs them in evaluation reports.
 """
 
 import subprocess
@@ -43,23 +43,29 @@ df_kb = pd.DataFrame({"text": docs})
 print(f"✅ Knowledge base created with {len(docs)} documents.")
 
 # -------------------------------
-# Step 2: RAG Prediction Function via CLI
+# Step 2: RAG Prediction Function via CLI (Safe)
 # -------------------------------
 def ollama_cli_predict(prompt: str) -> str:
     """
     Call Ollama CLI to generate a completion using the local model.
+    Handles errors safely and captures stdout/stderr.
     """
     try:
+        cmd = ["ollama", "generate", MODEL_NAME, "--prompt", prompt]
         result = subprocess.run(
-            ["ollama", "generate", MODEL_NAME, prompt],
+            cmd,
             capture_output=True,
             text=True,
-            check=True
+            check=False  # Do not raise exception on non-zero exit
         )
+        if result.returncode != 0:
+            print(f"❌ Ollama CLI failed with exit code {result.returncode}")
+            print("stderr:", result.stderr.strip())
+            return f"Error: Ollama CLI failed ({result.stderr.strip()})"
         return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print("❌ Error calling Ollama CLI:", e)
-        return "Error: Could not generate response"
+    except FileNotFoundError:
+        print("❌ Ollama CLI not found. Ensure 'ollama' is in PATH.")
+        return "Error: Ollama CLI not found"
 
 def build_rag_predict_fn():
     """
@@ -90,7 +96,7 @@ def local_rag_evaluate(predict_fn, testset):
         q = test["question"]
         expected = test["expected_answer_contains"]
         answer = predict_fn(q)
-        passed = expected.lower() in answer.lower()
+        passed = expected.lower() in answer.lower() if not answer.startswith("Error:") else False
         results.append({"question": q, "answer": answer, "expected": expected, "passed": passed})
     return results
 
@@ -105,14 +111,14 @@ rag_predict_fn = build_rag_predict_fn()
 results = local_rag_evaluate(rag_predict_fn, testset)
 
 # Save results as JSON
-json_file = output_dir / "rag_results_llama3.1_8b-instruct_cli.json"
+json_file = output_dir / "rag_results_llama3.1_8b-instruct_cli_safe.json"
 with open(json_file, "w") as f:
     json.dump(results, f, indent=2)
 
 # Save simple HTML report
-html_file = output_dir / "rag_report_llama3.1_8b-instruct_cli.html"
+html_file = output_dir / "rag_report_llama3.1_8b-instruct_cli_safe.html"
 with open(html_file, "w") as f:
-    f.write(f"<h1>RAG Evaluation Report - {MODEL_NAME} (CLI)</h1>\n<table border='1'>")
+    f.write(f"<h1>RAG Evaluation Report - {MODEL_NAME} (CLI Safe)</h1>\n<table border='1'>")
     f.write("<tr><th>Question</th><th>Answer</th><th>Expected</th><th>Passed</th></tr>")
     for r in results:
         f.write(f"<tr><td>{escape(r['question'])}</td><td>{escape(r['answer'])}</td>"
@@ -126,4 +132,4 @@ print(f"✅ Evaluation complete. JSON: {json_file} | HTML: {html_file}")
 # -------------------------------
 sample_question = "What is Giskard?"
 answer = rag_predict_fn(sample_question)
-print(f"\nSample answer from {MODEL_NAME} (CLI):\n{answer}")
+print(f"\nSample answer from {MODEL_NAME} (CLI Safe):\n{answer}")
