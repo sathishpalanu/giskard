@@ -1,135 +1,91 @@
-# rag_local_test_llama3_cli_safe.py
-
-"""
-Offline RAG Evaluation using Llama3 1-8B-Instruct via Ollama CLI (safe mode).
-Handles CLI errors gracefully and logs them in evaluation reports.
-"""
-
-import subprocess
+import os
+import requests
 import pandas as pd
-import json
-from pathlib import Path
-from html import escape
 
-# -------------------------------
-# Step 0: Check Ollama CLI
-# -------------------------------
-def check_ollama_cli():
-    """Verify Ollama CLI is installed and reachable."""
-    try:
-        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True)
-        print("✅ Ollama CLI found. Installed models:\n", result.stdout)
-    except FileNotFoundError:
-        print("❌ Ollama CLI not found. Install Ollama App and ensure `ollama` is in PATH.")
-        exit(1)
-    except subprocess.CalledProcessError as e:
-        print("❌ Error running Ollama CLI:", e)
-        exit(1)
+from giskard.rag import (
+    KnowledgeBase,
+    generate_testset,
+    QATestset,
+    evaluate,
+    AgentAnswer,
+)
+from giskard.rag.metrics.ragas_metrics import (
+    # pick the metrics you want
+    ragas_context_precision,
+    ragas_context_recall
+)
 
-check_ollama_cli()
+# --- CONFIGURE ---
+# Your frontend URL
+RAG_URL = "https://YOUR-RAG-APP.com/api/query"
 
-MODEL_NAME = "llama3.1:8b-instruct"
+# (Optional) your knowledge base documents (if you want auto testset generation)
+KB_CSV_PATH = "path/to/your_kb_docs.csv"
+# Columns in your CSV that contain the text content
+KB_COLUMNS = ["text"]  # adapt as needed
 
-# -------------------------------
-# Step 1: Local Knowledge Base
-# -------------------------------
-docs = [
-    "Python is a programming language widely used for data science and AI.",
-    "Giskard is a framework for testing and evaluating AI and RAG systems.",
-    "Llama 3 1-8B-Instruct is a large language model by Meta."
-]
+# Agent description (for test-set generation)
+AGENT_DESCRIPTION = "A chatbot answering questions about my domain"
 
-df_kb = pd.DataFrame({"text": docs})
-print(f"✅ Knowledge base created with {len(docs)} documents.")
+# Number of questions to generate
+NUM_QUESTIONS = 50
 
-# -------------------------------
-# Step 2: RAG Prediction Function via CLI (Safe)
-# -------------------------------
-def ollama_cli_predict(prompt: str) -> str:
+# --- setup LLM client if needed ---
+# e.g., using OpenAI:
+os.environ["OPENAI_API_KEY"] = "<YOUR_OPENAI_API_KEY>"
+# optionally set embedding model / llm via giskard.llm.set_* if needed
+
+# --- Build knowledge base ---
+df_kb = pd.read_csv(KB_CSV_PATH)
+kb = KnowledgeBase.from_pandas(df_kb, columns=KB_COLUMNS)
+
+# --- Generate testset (if you don’t already have one) ---
+testset = generate_testset(
+    knowledge_base=kb,
+    num_questions=NUM_QUESTIONS,
+    language='en',
+    agent_description=AGENT_DESCRIPTION
+)
+# Save it for reuse
+testset.save("rag_testset.jsonl")
+
+# --- Or if you already have a testset ---
+# testset = QATestset.load("rag_testset.jsonl")
+
+# --- Define prediction function that uses your frontend URL ---
+def answer_fn(question: str, history: list[dict] = None) -> AgentAnswer:
     """
-    Call Ollama CLI to generate a completion using the local model.
-    Handles errors safely and captures stdout/stderr.
+    Calls the RAG front-end endpoint and returns an AgentAnswer
+    which includes the answer and optionally the context docs retrieved by the agent.
     """
-    try:
-        cmd = ["ollama", "generate", MODEL_NAME, "--prompt", prompt]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False  # Do not raise exception on non-zero exit
-        )
-        if result.returncode != 0:
-            print(f"❌ Ollama CLI failed with exit code {result.returncode}")
-            print("stderr:", result.stderr.strip())
-            return f"Error: Ollama CLI failed ({result.stderr.strip()})"
-        return result.stdout.strip()
-    except FileNotFoundError:
-        print("❌ Ollama CLI not found. Ensure 'ollama' is in PATH.")
-        return "Error: Ollama CLI not found"
+    payload = {"query": question}
+    # if your API expects conversation history or other fields, modify this
+    resp = requests.post(RAG_URL, json=payload, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    
+    # Extract answer
+    answer_text = data.get("answer", "")
+    
+    # If your API returns retrieved context (chunks) do:
+    contexts = data.get("contexts", [])  # adjust key if different
+    # Ensure contexts is a list of strings
+    docs = [str(c) for c in contexts]
+    
+    return AgentAnswer(message=answer_text, documents=docs)
 
-def build_rag_predict_fn():
-    """
-    Returns a RAG prediction function using Ollama CLI.
-    """
-    def rag_predict_fn(question: str):
-        context = "\n".join(docs)
-        prompt = f"Answer the question using the following context:\n\n{context}\n\nQ: {question}\nA:"
-        return ollama_cli_predict(prompt)
-    return rag_predict_fn
+# --- Run evaluation ---
+report = evaluate(
+    answer_fn,
+    testset=testset,
+    knowledge_base=kb,
+    metrics=[ragas_context_precision, ragas_context_recall]
+)
 
-# -------------------------------
-# Step 3: Offline Test Cases
-# -------------------------------
-testset = [
-    {"question": "What is Python?", "expected_answer_contains": "programming language"},
-    {"question": "What is Giskard?", "expected_answer_contains": "framework"},
-    {"question": "Who created Llama3 1-8B-Instruct?", "expected_answer_contains": "Meta"},
-    {"question": "What is Python used for?", "expected_answer_contains": "data science"}
-]
+# --- Inspect & save report ---
+report.save("rag_report")
+html = report.to_html(embed=True)
+with open("rag_report.html", "w", encoding="utf-8") as f:
+    f.write(html)
 
-# -------------------------------
-# Step 4: Offline Evaluation
-# -------------------------------
-def local_rag_evaluate(predict_fn, testset):
-    results = []
-    for test in testset:
-        q = test["question"]
-        expected = test["expected_answer_contains"]
-        answer = predict_fn(q)
-        passed = expected.lower() in answer.lower() if not answer.startswith("Error:") else False
-        results.append({"question": q, "answer": answer, "expected": expected, "passed": passed})
-    return results
-
-# -------------------------------
-# Step 5: Run Evaluation
-# -------------------------------
-output_dir = Path("rag_reports")
-output_dir.mkdir(exist_ok=True)
-
-print(f"\n🔹 Evaluating model: {MODEL_NAME} via Ollama CLI")
-rag_predict_fn = build_rag_predict_fn()
-results = local_rag_evaluate(rag_predict_fn, testset)
-
-# Save results as JSON
-json_file = output_dir / "rag_results_llama3.1_8b-instruct_cli_safe.json"
-with open(json_file, "w") as f:
-    json.dump(results, f, indent=2)
-
-# Save simple HTML report
-html_file = output_dir / "rag_report_llama3.1_8b-instruct_cli_safe.html"
-with open(html_file, "w") as f:
-    f.write(f"<h1>RAG Evaluation Report - {MODEL_NAME} (CLI Safe)</h1>\n<table border='1'>")
-    f.write("<tr><th>Question</th><th>Answer</th><th>Expected</th><th>Passed</th></tr>")
-    for r in results:
-        f.write(f"<tr><td>{escape(r['question'])}</td><td>{escape(r['answer'])}</td>"
-                f"<td>{escape(r['expected'])}</td><td>{r['passed']}</td></tr>")
-    f.write("</table>")
-
-print(f"✅ Evaluation complete. JSON: {json_file} | HTML: {html_file}")
-
-# -------------------------------
-# Step 6: Quick Validation
-# -------------------------------
-sample_question = "What is Giskard?"
-answer = rag_predict_fn(sample_question)
-print(f"\nSample answer from {MODEL_NAME} (CLI Safe):\n{answer}")
+print("Evaluation completed. Report saved to rag_report.html")
