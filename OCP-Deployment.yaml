@@ -1,0 +1,106 @@
+# ==================================================
+# Persistent Volume Claim for Giskard storage
+# ==================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: giskard-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi  # 👈 Adjust size as needed
+---
+# ==================================================
+# Deployment for Giskard with persistent storage and built-in API
+# ==================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: giskard-rag
+  labels:
+    app: giskard-rag
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: giskard-rag
+  template:
+    metadata:
+      labels:
+        app: giskard-rag
+    spec:
+      containers:
+        - name: giskard-rag
+          image: python:latest  # <- replace with your internal Python golden image
+          command: ["sh", "-c"]
+          args:
+            - |
+              pip install --no-cache-dir giskard requests flask && \
+              mkdir -p /mnt/giskard_data && \
+              echo "
+import os
+from flask import Flask, request, jsonify
+from giskard import Client
+
+app = Flask(__name__)
+
+# Use your backend URL
+rag_backend_url = os.environ.get('RAG_BACKEND_URL', 'http://<YOUR_BACKEND_RAG_URL_HERE>')
+client = Client(rag_backend_url, storage_path='/mnt/giskard_data')  # 👈 Persistent mount path
+
+@app.route('/api/query', methods=['POST'])
+def query():
+    data = request.get_json()
+    question = data.get('question', '')
+    answer = client.ask(question)
+    return jsonify({'answer': answer})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+" > /mnt/giskard_data/server.py && \
+              python /mnt/giskard_data/server.py
+          ports:
+            - containerPort: 5000
+          env:
+            - name: RAG_BACKEND_URL
+              value: "http://<YOUR_BACKEND_RAG_URL_HERE>"  # 👈 Replace with your actual RAG backend URL
+          volumeMounts:
+            - name: giskard-storage
+              mountPath: /mnt/giskard_data  # 👈 Path inside container to store persistent data
+      volumes:
+        - name: giskard-storage
+          persistentVolumeClaim:
+            claimName: giskard-pvc
+---
+# ==================================================
+# Service to expose Giskard container internally
+# ==================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: giskard-rag
+spec:
+  selector:
+    app: giskard-rag
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+---
+# ==================================================
+# Route to expose the service externally
+# ==================================================
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: giskard-rag
+spec:
+  to:
+    kind: Service
+    name: giskard-rag
+  port:
+    targetPort: 80
+  tls:
+    termination: edge
