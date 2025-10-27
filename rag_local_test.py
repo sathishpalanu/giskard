@@ -1,91 +1,59 @@
-import os
 import requests
-import pandas as pd
-
-from giskard.rag import (
-    KnowledgeBase,
-    generate_testset,
-    QATestset,
-    evaluate,
-    AgentAnswer,
-)
+from giskard.rag import QATestset, AgentAnswer, evaluate
 from giskard.rag.metrics.ragas_metrics import (
-    # pick the metrics you want
     ragas_context_precision,
-    ragas_context_recall
+    ragas_context_recall,
 )
 
-# --- CONFIGURE ---
-# Your frontend URL
-RAG_URL = "https://YOUR-RAG-APP.com/api/query"
+# === 1️⃣ YOUR FRONTEND URL ===
+RAG_URL = "https://your-rag-frontend-url.com/api/query"  # 👈 Replace with your actual chat API URL
 
-# (Optional) your knowledge base documents (if you want auto testset generation)
-KB_CSV_PATH = "path/to/your_kb_docs.csv"
-# Columns in your CSV that contain the text content
-KB_COLUMNS = ["text"]  # adapt as needed
 
-# Agent description (for test-set generation)
-AGENT_DESCRIPTION = "A chatbot answering questions about my domain"
+# === 2️⃣ DEFINE A FEW TEST QUESTIONS (Ground Truths) ===
+# You can start small — 2 or 3 questions with known correct answers.
+questions = [
+    "What is the capital of France?",
+    "Who wrote the novel 1984?",
+]
+ground_truths = [
+    "Paris",
+    "George Orwell",
+]
 
-# Number of questions to generate
-NUM_QUESTIONS = 50
+# Build a very basic testset
+testset = QATestset.from_dict({
+    "question": questions,
+    "ground_truth": ground_truths
+})
 
-# --- setup LLM client if needed ---
-# e.g., using OpenAI:
-os.environ["OPENAI_API_KEY"] = "<YOUR_OPENAI_API_KEY>"
-# optionally set embedding model / llm via giskard.llm.set_* if needed
 
-# --- Build knowledge base ---
-df_kb = pd.read_csv(KB_CSV_PATH)
-kb = KnowledgeBase.from_pandas(df_kb, columns=KB_COLUMNS)
-
-# --- Generate testset (if you don’t already have one) ---
-testset = generate_testset(
-    knowledge_base=kb,
-    num_questions=NUM_QUESTIONS,
-    language='en',
-    agent_description=AGENT_DESCRIPTION
-)
-# Save it for reuse
-testset.save("rag_testset.jsonl")
-
-# --- Or if you already have a testset ---
-# testset = QATestset.load("rag_testset.jsonl")
-
-# --- Define prediction function that uses your frontend URL ---
-def answer_fn(question: str, history: list[dict] = None) -> AgentAnswer:
+# === 3️⃣ DEFINE HOW TO CALL YOUR RAG FRONTEND ===
+def answer_fn(question: str, history=None) -> AgentAnswer:
     """
-    Calls the RAG front-end endpoint and returns an AgentAnswer
-    which includes the answer and optionally the context docs retrieved by the agent.
+    Sends a user query to your RAG front-end and returns the answer.
+    If your API returns retrieved docs, include them; otherwise, pass [].
     """
     payload = {"query": question}
-    # if your API expects conversation history or other fields, modify this
-    resp = requests.post(RAG_URL, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    
-    # Extract answer
-    answer_text = data.get("answer", "")
-    
-    # If your API returns retrieved context (chunks) do:
-    contexts = data.get("contexts", [])  # adjust key if different
-    # Ensure contexts is a list of strings
-    docs = [str(c) for c in contexts]
-    
-    return AgentAnswer(message=answer_text, documents=docs)
+    response = requests.post(RAG_URL, json=payload, timeout=60)
+    response.raise_for_status()
+    data = response.json()
 
-# --- Run evaluation ---
+    # Adjust these keys to match your API response
+    answer_text = data.get("answer") or data.get("response") or ""
+    contexts = data.get("contexts", [])  # optional
+
+    return AgentAnswer(message=answer_text, documents=contexts)
+
+
+# === 4️⃣ RUN A SIMPLE EVALUATION ===
+# Here we’ll just check context precision/recall — no need for a KB yet.
 report = evaluate(
     answer_fn,
     testset=testset,
-    knowledge_base=kb,
-    metrics=[ragas_context_precision, ragas_context_recall]
+    metrics=[ragas_context_precision, ragas_context_recall],
 )
 
-# --- Inspect & save report ---
-report.save("rag_report")
-html = report.to_html(embed=True)
-with open("rag_report.html", "w", encoding="utf-8") as f:
-    f.write(html)
-
-print("Evaluation completed. Report saved to rag_report.html")
+# === 5️⃣ SAVE OR PRINT RESULTS ===
+report.save("basic_rag_report")
+print(report.to_pandas())
+print("\n✅ RAG Evaluation complete. See saved report in 'basic_rag_report' folder.")
