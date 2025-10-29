@@ -1,29 +1,27 @@
+import pandas as pd
 import giskard
-from sklearn.datasets import load_iris
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+from giskard import Model, Dataset, test
 
-# Load and train
-iris = load_iris(as_frame=True)
-X = iris.data
-y = iris.target
-X_train, X_test, y_train, y_test = train_test_split(X, y)
-model = RandomForestClassifier().fit(X_train, y_train)
+# --- Dummy model (simulates an LLM) ---
+def dummy_predict(inputs):
+    return ["This is a simple response to: " + q for q in inputs]
 
-# Wrap model
-giskard_model = giskard.Model(
-    model=model,
-    model_type="classification",
-    name="iris_rf_model",
-    feature_names=X.columns.tolist(),
-    classification_labels=list(iris.target_names)
-)
+# --- Sample dataset ---
+df = pd.DataFrame({
+    "query": ["Hello", "Tell me a joke", "What is AI?"],
+    "expected_answer": ["Hi there!", "Funny!", "Artificial Intelligence"]
+})
 
-# Upload to self-hosted Giskard
-giskard.upload(
-    model=giskard_model,
-    dataset=X_test,
-    target=y_test,
-    project_key="your-project-key",  # Replace with actual key from UI
-    host="https://giskard-giskard-poc.apps.<your-cluster-domain>"
-)
+dataset = Dataset.from_pandas(df, target="expected_answer", column_types={"query": "text"})
+
+# --- Register model ---
+model = Model(prediction_function=dummy_predict, model_type="text_generation", name="DummyLLM")
+
+# --- Run a single built-in test ---
+suite = giskard.TestSuite(name="POC suite")
+suite.add_test(test.test_robustness_perturbation(model, dataset))
+result = suite.run()
+
+# --- Save & show results ---
+result.to_html("giskard_report.html")
+print("\n✅ POC finished! Open 'giskard_report.html' to view your results.\n")
